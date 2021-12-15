@@ -1,10 +1,15 @@
 import 'dart:ffi';
-import 'dart:html';
+import 'dart:io';
 import 'dart:math';
 
+import 'package:cookie_jar/cookie_jar.dart';
+import 'package:dio/adapter.dart';
 import 'package:dio/dio.dart';
+import 'package:dio_cookie_manager/dio_cookie_manager.dart';
+import 'package:flutter/src/widgets/text.dart' as tx;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:pontao_unb/config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:html/dom.dart';
 import 'package:html/parser.dart';
@@ -24,8 +29,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
           brightness: Brightness.light,
           primaryColor: const Color.fromRGBO(0, 58, 122, 1),
-          buttonTheme: const ButtonThemeData(
-              buttonColor: Color.fromRGBO(0, 166, 235, 1))),
+          buttonTheme: const ButtonThemeData(buttonColor: Color.fromRGBO(0, 166, 235, 1))),
       home: const PaginaPonto(title: 'Pontao UnB'),
     );
   }
@@ -38,9 +42,16 @@ class PaginaPonto extends StatefulWidget {
   State<PaginaPonto> createState() => _PaginaPontoState();
 }
 
+// basicamente um mnemonico pra dizer saida_almoco = 0 e saida_dia=1
+// enums em dart sao declaradas assim, os nomes nao sao variaveis e sim chaves da enum
+enum Notificacoes { saida_almoco, saida_dia }
+
 class _PaginaPontoState extends State<PaginaPonto> {
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  /* -------------------------------------------------------------------------- */
+  /*                             Switch de Ambiente                             */
+  /* -------------------------------------------------------------------------- */
   bool desenvolvimento = true;
 
   // Valores para as credenciais, vem do shared prefs
@@ -72,11 +83,19 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
   // Sufixos das telas correspondentes, o dio usa uma url base para fazer todas as requisicoes
   final loginSuffix = '/sigrh/login.jsf';
-  final entradaSaidaSuffix =
-      '/sigrh/frequencia/ponto_eletronico/cadastro_ponto_eletronico.jsf';
+  final entradaSaidaSuffix = '/sigrh/frequencia/ponto_eletronico/cadastro_ponto_eletronico.jsf';
   final servidorSuffix = '/sigrh/servidor/portal/servidor.jsf';
-  final unidadeSuffix =
-      '/sigrh/frequencia/ponto_eletronico/form_selecao_unidade.jsf';
+  final unidadeSuffix = '/sigrh/frequencia/ponto_eletronico/form_selecao_unidade.jsf';
+
+  // metodo de ciclo de vida do flutter para limpar os componentes,
+  // nao vai ser necessário quando retirar os controladores que nao estao sendo usados
+  @override
+  void dispose() {
+    loginController.dispose();
+    passController.dispose();
+    codigoController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -112,8 +131,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     }
 
     if (prefs.containsKey('codigo')) {
-      codigoController =
-          TextEditingController(text: prefs.get('codigo').toString());
+      codigoController = TextEditingController(text: prefs.get('codigo').toString());
     }
 
     if (prefs.containsKey('almoco')) {
@@ -124,9 +142,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
     if (prefs.containsKey('avisoHoras') && prefs.containsKey('avisoMinutos')) {
       setState(() {
-        tempoAviso = TimeOfDay(
-            hour: prefs.getInt('avisoHoras') ?? 1,
-            minute: prefs.getInt('avisoMinutos') ?? 0);
+        tempoAviso = TimeOfDay(hour: prefs.getInt('avisoHoras') ?? 1, minute: prefs.getInt('avisoMinutos') ?? 0);
       });
     } else {
       setState(() {
@@ -151,11 +167,127 @@ class _PaginaPontoState extends State<PaginaPonto> {
     }
   }
 
+  /* -------------------------------------------------------------------------- */
+  /*                                 Bater Ponto                                */
+  /* -------------------------------------------------------------------------- */
+  Future baterPonto() async {
+    var baseUrl = '';
+    setState(() {
+      confirmacao = false;
+    });
+    if (desenvolvimento) {
+      baseUrl = 'https://sig.homologa.unb.br';
+      // final BaseUrl = 'https://sig.desenv.unb.br';
+      // final BaseUrl = 'https://sig.treinamento.unb.br';
+    } else {
+      baseUrl = 'https://sig.unb.br';
+    }
 
-    // verifica onde o login foi parar, tipicamente na página de ponto, mas pode ser outro lugar
+    // host é um header obrigatório para o post
+    final urlHost = baseUrl.replaceAll('https://', '');
+    final cookieJar = CookieJar();
+
+    // aqui ele busca os dados que vieram do shared prefs
+    // mudar para colocar direto do shared prefs e deletar
+    // os controladores inuteis
+    setState(() {
+      login = loginController.text;
+      pass = passController.text;
+      codigoUnidade = codigoController.text;
+    });
+
+    // Configurar a instância do Dio.
+    BaseOptions optionsDio = BaseOptions(baseUrl: baseUrl);
+    Dio dio = Dio(optionsDio);
+    /* -------- LIGAR ESSA VERSÃO PARA VER OS CHAMADOS DO DIO NO CONSOLE -------- */
+    // dio.interceptors..add(CookieManager(cookieJar))..add(LogInterceptor());
+
+    /* ------------ adiciona o gerenciador de cookies no cliente http ----------- */
+    dio.interceptors..add(CookieManager(cookieJar));
+
+    // Esse codigo ignora avisos de bad certificate.
+    (dio.httpClientAdapter as DefaultHttpClientAdapter).onHttpClientCreate = (client) {
+      client.badCertificateCallback = (X509Certificate cert, String host, int port) {
+        return true;
+      };
+    };
+
+    setState(() {
+      isLoading = true;
+      textoAviso = '📡 Buscando a página de login\n';
+    });
+    // Usa o referer da pagina expirada para evitar o popup, nao deve ser necessário depois do SSO
+    var optionsGet = Options(headers: {'Referer': baseUrl + '/sigrh/expirada.jsp'});
+
+    // Busca a Página de Login
+    var getLogin;
+    try {
+      getLogin = await dio.get(loginSuffix, options: optionsGet);
+    } on DioError catch (e) {
+      avisoErro('⛔ Erro ao recuperar a página de login, verifique a sua conexão de internet');
+      return;
+    }
+    // o resultado do get é o response, os dados correspondem ao html retornado
+    // em cada requisicao em faço o parse do html recebido e trabalho ele no formato DOM
+    var domGetLogin = parse(getLogin.data);
+
+    // O view state é um valor que o jsf mantem para rastrear as navegações, é preciso obte-lo para
+    // fazer as chamadas subsequentes
+    var viewStateValue = buscarViewState(domGetLogin);
+
+    // Configurar o POST para o login
+    // manda dimensões para evitar a página mobile, que nao tem a pagina de ponto
+    FormData formDataLogin = FormData.fromMap({
+      'formLogin': 'formLogin',
+      'width': '1920',
+      'height': '1080',
+      // 'urlRedirect': '',
+      'login': login,
+      'senha': pass,
+      'logar': 'Entrar',
+      'javax.faces.ViewState': viewStateValue,
+    });
+
+    // basicamente imita os headers utilizados no chrome
+    var headersPost = {
+      'Host': urlHost,
+      'Connection': 'close',
+      'Pragma': 'no-cache',
+      'Cache-Control': 'no-cache',
+      'Origin': baseUrl,
+      'Upgrade-Insecure-Requests': 1,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.108 Safari/537.36',
+      'Accept':
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3',
+      'Referer': baseUrl + '/sigrh/expirada.jsp',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept-Language': 'en-US,en;q=0.9,pt;q=0.8',
+    };
+
+    var optionsPost = Options(headers: headersPost);
+
+    // Post para realizar o login, o processo é o mesmo mas com post agora, usa o follow redirects
+    // que é uma funcao recursiva que faz as chamadas para o endereco colocado no header location da resposta
+    aviso('🖥️ Realizando login'); // Realizar o Login
+    var postLogin;
+    try {
+      postLogin = await dio.post(loginSuffix, data: formDataLogin, options: optionsPost);
+    } on DioError catch (e) {
+      postLogin = await followRedirect(e, dio);
+    }
+    var domPostLogin = parse(postLogin.data);
+    viewStateValue = buscarViewState(domPostLogin);
+
+    // Verficiar o status após a tentativa de login e navegar de acordo
+    realizarNavegacao(postLogin.data, viewStateValue, dio, entradaSaidaSuffix, optionsPost);
+  }
+
+  // verifica onde o login foi parar, tipicamente na página de ponto, mas pode ser outro lugar
   // determina o que fazer a partir daí, navegar para a página de ponto ou bater o ponto.
   // é aqui que o aplicativo descobre se ele ta batendo o ponto de entrada ou saída
-  void realizarNavegacao(String postLoginData, String viewStateValue, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
+  void realizarNavegacao(
+      String postLoginData, String viewStateValue, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
     var domPostLogin = parse(postLoginData);
     var viewStateNavegacao = buscarViewState(domPostLogin);
 
@@ -192,10 +324,10 @@ class _PaginaPontoState extends State<PaginaPonto> {
     }
   }
 
-    // bate o pojnto para a entrada, mmetade do método é o post e a outra
+  // bate o pojnto para a entrada, mmetade do método é o post e a outra
   // é buscar os horários registgrados e calcular o horario de saida
   Future realizarEntrada(String viewState, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
-    FormData formDataEntrada = FormData.from({
+    FormData formDataEntrada = FormData.fromMap({
       'idFormDadosEntradaSaida': 'idFormDadosEntradaSaida',
       'idFormDadosEntradaSaida:observacoes': '',
       'idFormDadosEntradaSaida:idBtnRegistrarEntrada': 'Registrar Entrada',
@@ -218,17 +350,21 @@ class _PaginaPontoState extends State<PaginaPonto> {
     var horasRegistradas = buscarHorasRegistradas(domPostEntrada);
     if (horasRegistradas.length > 0) {
       if (horasRegistradas[0] != '00:00') {
-        DateTime tempoMinimoSaida = getTempoMinimoAteSaida(horasRegistradas, getHorasRegime(), ultimaEntrada).subtract(Duration(minutes: 15));
+        DateTime tempoMinimoSaida =
+            getTempoMinimoAteSaida(horasRegistradas, getHorasRegime(), ultimaEntrada).subtract(Duration(minutes: 15));
         var textoAvisoExpediente = 'Horário mínimo de saída atingido';
         if (avisarSaidaAntes) {
           tempoMinimoSaida = tempoMinimoSaida.subtract(Duration(minutes: 5));
           textoAvisoExpediente = 'Fim do expediente em 5 minutos';
         }
-        marcarNotificacao(Notificacoes.saida_dia.index, tempoMinimoSaida.hour, tempoMinimoSaida.minute, textoAvisoExpediente, 'Lembrete');
+        marcarNotificacao(
+            Notificacoes.saida_dia.index, tempoMinimoSaida.hour, tempoMinimoSaida.minute, textoAvisoExpediente, 'Lembrete');
       }
-      var textoHorasRegistradas = '\n\n\n⏱️ Horas Registradas: ' + horasRegistradas[0] + '\n⏰ Horas Contabilizadas: ' + horasRegistradas[1];
+      var textoHorasRegistradas =
+          '\n\n\n⏱️ Horas Registradas: ' + horasRegistradas[0] + '\n⏰ Horas Contabilizadas: ' + horasRegistradas[1];
       aviso(textoHorasRegistradas);
-      var textoHorarioMinimoSaida = '⌚ Horario Mínimo de Saída: ' + getTextoHorarioMinimoSaida(horasRegistradas, getHorasRegime(), ultimaEntrada);
+      var textoHorarioMinimoSaida =
+          '⌚ Horario Mínimo de Saída: ' + getTextoHorarioMinimoSaida(horasRegistradas, getHorasRegime(), ultimaEntrada);
 
       aviso(textoHorarioMinimoSaida);
       _saveTimetable(horarios.toString() + textoHorasRegistradas + '\n' + textoHorarioMinimoSaida);
@@ -247,7 +383,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       almoco = saidaAlmocoSePossivel && isHoraAlmoco();
     }
 
-    FormData formDataEntrada = FormData.from({
+    FormData formDataEntrada = FormData.fromMap({
       'idFormDadosEntradaSaida': 'idFormDadosEntradaSaida',
       'idFormDadosEntradaSaida:observacoes': '',
       'idFormDadosEntradaSaida:saidaAlmoco': almoco.toString(),
@@ -274,15 +410,16 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
     var horasRegistradas = buscarHorasRegistradas(domPostSaida);
     if (horasRegistradas.length > 0) {
-      var textoHorasRegistradas = '\n\n\n⏱️ Horas Registradas: ' + horasRegistradas[0] + '\n⏰ Horas Contabilizadas: ' + horasRegistradas[1];
+      var textoHorasRegistradas =
+          '\n\n\n⏱️ Horas Registradas: ' + horasRegistradas[0] + '\n⏰ Horas Contabilizadas: ' + horasRegistradas[1];
       aviso(textoHorasRegistradas);
       _saveTimetable(horarios.toString() + textoHorasRegistradas);
     }
 
     // Marcar o push notification, roda sempre em desenv
     if (desenvolvimento || almoco) {
-      marcarNotificacao(
-          Notificacoes.saida_almoco.index, tempoAviso.hour, tempoAviso.minute, 'Horário mínimo de saída de almoço atingido', 'Lembrete');
+      marcarNotificacao(Notificacoes.saida_almoco.index, tempoAviso.hour, tempoAviso.minute,
+          'Horário mínimo de saída de almoço atingido', 'Lembrete');
     }
 
     setState(() {
@@ -292,7 +429,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
   // Move a navegacao para a pagina de registro de ponto
   Future navegarParaPonto(String viewStateAnterior, Dio dio, String servidorRadix, Options optionsPost) async {
-    FormData formDataPonto = FormData.from({
+    FormData formDataPonto = FormData.fromMap({
       'painelAcessoDadosServidor': 'painelAcessoDadosServidor',
       'painelAcessoDadosServidor:linkPontoEletronicoAntigo': 'painelAcessoDadosServidor:linkPontoEletronicoAntigo',
       'javax.faces.ViewState': viewStateAnterior,
@@ -309,11 +446,12 @@ class _PaginaPontoState extends State<PaginaPonto> {
   }
 
   // nao é preciso interagir com o dropdown, apenas colocar o valor correto nos dados do form
-  Future selecionarUnidade(String viewStateAnterior, Dio dio, String servidorRadix, Options optionsPost, html.Document dom) async {
+  Future selecionarUnidade(String viewStateAnterior, Dio dio, String servidorRadix, Options optionsPost, Document dom) async {
     if (codigoUnidade.isEmpty) {
       var opcoes = dom.querySelectorAll('select[name="selecionarUnidadeForm:unidade"]>option:not([disabled])');
       if (opcoes.length > 0) {
-        aviso('👁️‍🗨️ Para selecionar a unidade permanentemente preencha o código da unidade escolhida no formulário de login\n');
+        aviso(
+            '👁️‍🗨️ Para selecionar a unidade permanentemente preencha o código da unidade escolhida no formulário de login\n');
         opcoes.forEach((o) => {
               if (o.text.indexOf('SELECIONE') == -1) {aviso('codigo: ' + o.attributes['value'].toString() + ' ' + o.text)}
             });
@@ -323,7 +461,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       }
     } else {
       aviso('🏢 Selecionando a unidade');
-      FormData formDataUnidade = FormData.from({
+      FormData formDataUnidade = FormData.fromMap({
         'selecionarUnidadeForm': 'selecionarUnidadeForm',
         'selecionarUnidadeForm:unidade': int.parse(codigoUnidade),
         'selecionarUnidadeForm:continuar': 'Continuar >>',
@@ -336,7 +474,6 @@ class _PaginaPontoState extends State<PaginaPonto> {
       realizarNavegacao(paginaPonto.data, viewStateUnidade, dio, entradaSaidaSuffix, optionsPost);
     }
   }
-
 
   // acho que nao está sendo utilizado ainda
   Future realizarLogoff(Dio dio, Options optionsPost) async {
@@ -370,7 +507,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     inputViewState.forEach((input) => {
           if (input.parent!.id == 'javax.faces.ViewState')
             {
-              viewStateValue = input.parent!.attributes['value'].toString() ,
+              viewStateValue = input.parent!.attributes['value'].toString(),
             }
         });
     return viewStateValue;
@@ -380,51 +517,35 @@ class _PaginaPontoState extends State<PaginaPonto> {
   /*                      Métodos para agendar notificações                     */
   /* -------------------------------------------------------------------------- */
   void inicializarPluginNotificacoes() {
-    const initializationSettingsAndroid =
-        AndroidInitializationSettings('app_icon24');
-    const initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
-    flutterLocalNotificationsPlugin.initialize(initializationSettings,
-        onSelectNotification: null);
+    const initializationSettingsAndroid = AndroidInitializationSettings('app_icon24');
+    const initializationSettings = InitializationSettings(android: initializationSettingsAndroid);
+    flutterLocalNotificationsPlugin.initialize(initializationSettings, onSelectNotification: null);
   }
 
   Future marcarNotificacao(int id, int hora, int minuto, String texto, String titulo) async {
-    var scheduledNotificationDateTime =
-        DateTime.now().add(Duration(hours: hora, minutes: minuto));
-    var androidPlatformChannelSpecifics = const AndroidNotificationDetails(
-        'ponto_unb', 'Ponto',
-        channelDescription: 'Notificações para o ponto eletrônico');
-    NotificationDetails platformChannelSpecifics =
-        NotificationDetails(android: androidPlatformChannelSpecifics);
+    var scheduledNotificationDateTime = DateTime.now().add(Duration(hours: hora, minutes: minuto));
+    var androidPlatformChannelSpecifics =
+        const AndroidNotificationDetails('ponto_unb', 'Ponto', channelDescription: 'Notificações para o ponto eletrônico');
+    NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
     await flutterLocalNotificationsPlugin.cancelAll();
-    await flutterLocalNotificationsPlugin.schedule(id, titulo, texto,
-        scheduledNotificationDateTime, platformChannelSpecifics);
+    await flutterLocalNotificationsPlugin.schedule(id, titulo, texto, scheduledNotificationDateTime, platformChannelSpecifics);
   }
 
   /* -------------------------------------------------------------------------- */
   /*                            Métodos para horários                           */
   /* -------------------------------------------------------------------------- */
   // consistem apenas de calculo de data e hora e manipulação de string.
-  DateTime getTempoMinimoAteSaida(
-      List<String> horasRegistradas, int horasRegime, String ultimaEntrada) {
+  DateTime getTempoMinimoAteSaida(List<String> horasRegistradas, int horasRegime, String ultimaEntrada) {
     var dateRegime = DateTime.utc(2000, 1, 1, horasRegime);
     var horasReg = int.parse(horasRegistradas[0].split(':')[0]);
     var minutosReg = int.parse(horasRegistradas[0].split(':')[1]);
-    return dateRegime
-        .subtract(Duration(hours: horasReg))
-        .subtract(Duration(minutes: minutosReg));
+    return dateRegime.subtract(Duration(hours: horasReg)).subtract(Duration(minutes: minutosReg));
   }
 
-  String getTextoHorarioMinimoSaida(
-      List<String> horasRegistradas, int horasRegime, String ultimaEntrada) {
-    var dateSub =
-        getTempoMinimoAteSaida(horasRegistradas, horasRegime, ultimaEntrada);
-    var timeUltimaEntrada = DateTime.utc(
-        2000,
-        1,
-        1,
-        int.parse(ultimaEntrada.split(':')[0]),
-        int.parse(ultimaEntrada.split(':')[1]));
+  String getTextoHorarioMinimoSaida(List<String> horasRegistradas, int horasRegime, String ultimaEntrada) {
+    var dateSub = getTempoMinimoAteSaida(horasRegistradas, horasRegime, ultimaEntrada);
+    var timeUltimaEntrada =
+        DateTime.utc(2000, 1, 1, int.parse(ultimaEntrada.split(':')[0]), int.parse(ultimaEntrada.split(':')[1]));
     var dateReturn = timeUltimaEntrada.add(Duration(hours: dateSub.hour));
     dateReturn = dateReturn.add(Duration(minutes: dateSub.minute));
     dateReturn = dateReturn.subtract(const Duration(minutes: 15));
@@ -444,8 +565,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
   dynamic buscarHorariosEntradaSaida(Document dom) {
     // var horariosSemana = domPostLogin.querySelectorAll('form[name="formHorariosSemana"]');
     var textoTabela = 'Data                Entrada  Saída\n';
-    var arrayDomHorarios = dom.querySelectorAll(
-        'form[name="formHorariosSemana"] > table > tbody > tr > td > span');
+    var arrayDomHorarios = dom.querySelectorAll('form[name="formHorariosSemana"] > table > tbody > tr > td > span');
     var arrayHorarios = arrayDomHorarios.map((h) => h.innerHtml);
     var contadorLinha = 0;
     for (var h in arrayHorarios) {
@@ -463,16 +583,14 @@ class _PaginaPontoState extends State<PaginaPonto> {
   }
 
   dynamic buscarUltimoHorarioEntrada(Document dom) {
-    var arrayDomHorarios = dom.querySelectorAll(
-        'form[name="formHorariosSemana"] > table > tbody > tr > td > span');
+    var arrayDomHorarios = dom.querySelectorAll('form[name="formHorariosSemana"] > table > tbody > tr > td > span');
     var arrayHorarios = arrayDomHorarios.map((h) => h.innerHtml);
     return arrayHorarios.elementAt(arrayHorarios.length - 1);
   }
 
   List<String> buscarHorasRegistradas(Document dom) {
     // retorna um array com [horas registradas, horas contabilizadas] formato HH:mm
-    var horas =
-        dom.querySelectorAll('tfoot > tr >td[style="font-weight: bold;"]');
+    var horas = dom.querySelectorAll('tfoot > tr >td[style="font-weight: bold;"]');
     var retorno = List.empty();
     if (horas.length >= 2) {
       retorno.add(horas[0].innerHtml);
@@ -502,7 +620,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     return emojis[Random().nextInt(emojis.length)] + ' Realizando Saída para almoço';
   }
 
-  // determina se estamos entre as 11 e as 15 horas 
+  // determina se estamos entre as 11 e as 15 horas
   bool isHoraAlmoco() {
     var now = TimeOfDay.now();
     return (now.hour >= 11 && now.hour < 15);
@@ -527,55 +645,108 @@ class _PaginaPontoState extends State<PaginaPonto> {
     });
   }
 
+  /* -------------------------------------------------------------------------- */
+  /*                         FRONT END DAQUI PRA FRENTE                         */
+  /* -------------------------------------------------------------------------- */
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    final title = 'Pontão UnB';
     return Scaffold(
       appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: tx.Text(title),
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
+      body: Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          desenvolvimento
+              ? tx.Text('Ambiente: Desenvolvimento')
+              : Container(
+                  height: 0,
+                  width: 0,
+                ),
+          Expanded(
+            flex: 1,
+            child: Card(
+                child: Container(
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  login.length > 0
+                      ? tx.Text(
+                          'Usuário: ' + login + '\nRegime: ' + getHorasRegime().toString() + ' horas',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                        )
+                      : Center(
+                          child: tx.Text('Primeiro uso, configure as credenciais no botão verde.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                              )),
+                        ),
+                  Row(
+                    children: [
+                      Expanded(
+                          child: isLoading
+                              ? Center(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: <Widget>[
+                                      LinearProgressIndicator(),
+                                    ],
+                                  ),
+                                )
+                              : confirmacao
+                                  ? RaisedButton.icon(
+                                      icon: Icon(Icons.done_all),
+                                      textColor: Colors.white,
+                                      color: Color.fromRGBO(0, 130, 46, 1),
+                                      label: tx.Text('Certeza?', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20)),
+                                      onPressed: baterPonto,
+                                      elevation: 15,
+                                    )
+                                  : RaisedButton.icon(
+                                      icon: Icon(Icons.done),
+                                      textColor: Colors.white,
+                                      label: tx.Text('Bater Ponto', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20)),
+                                      onPressed: () => setState(() {
+                                        confirmacao = true;
+                                      }),
+                                      elevation: 15,
+                                    ))
+                    ],
+                  ),
+                ],
+              ),
+            )),
+          ),
+          Expanded(
+            flex: 2,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.all(10),
+              child: tx.Text(
+                textoAviso,
+                style: TextStyle(fontSize: 18),
+              ),
             ),
-            Text(
-              'AAA',
-              style: Theme.of(context).textTheme.headline4,
-            ),
-          ],
-        ),
+          )
+        ],
       ),
-      floatingActionButton: const FloatingActionButton(
-        onPressed: null,
-        tooltip: 'Increment',
-        child: Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      floatingActionButton: FloatingActionButton(
+        onPressed: isLoading
+            ? null
+            : () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => PaginaConfiguracao()),
+                ).whenComplete(() => {_loadCredentials(), setState(() {})});
+              },
+        disabledElevation: 0,
+        elevation: 11,
+        child: Icon(Icons.assignment_ind),
+        backgroundColor: Colors.green,
+      ),
     );
   }
 }
