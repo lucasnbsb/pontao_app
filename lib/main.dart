@@ -186,6 +186,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
     // host é um header obrigatório para o post
     final urlHost = baseUrl.replaceAll('https://', '');
+    final urlHostLogin = desenvolvimento ? 'autenticacao.homologa.unb.br' : 'TODO';
 
     // aqui ele busca os dados que vieram do shared prefs
     // mudar para colocar direto do shared prefs e deletar
@@ -198,11 +199,11 @@ class _PaginaPontoState extends State<PaginaPonto> {
     });
 
     // Configurar a instância do Dio.
-    BaseOptions optionsDio = BaseOptions();
+    BaseOptions optionsDio = BaseOptions(baseUrl: baseUrl);
     Dio dio = Dio(optionsDio);
 
     /* ------------ adiciona o gerenciador de cookies no cliente http ----------- */
-    var cookieJar=CookieJar();
+    var cookieJar = CookieJar();
     dio.interceptors.add(CookieManager(cookieJar));
     /* -------- LIGAR ESSA VERSÃO PARA VER OS CHAMADOS DO DIO NO CONSOLE -------- */
     // dio.interceptors..add(CookieManager(cookieJar))..add(LogInterceptor());
@@ -219,13 +220,13 @@ class _PaginaPontoState extends State<PaginaPonto> {
       textoAviso = '📡 Buscando a página de login\n';
     });
     if (sso) {
-      realizarLoginSSO(loginUrl, baseUrl, urlHost, dio, cookieJar);
+      realizarLoginSSO(loginUrl, urlHostLogin , baseUrl, urlHost, dio, cookieJar);
     } else {
       realizarLoginAntigo(loginUrl, baseUrl, urlHost, dio);
     }
   }
 
-  realizarLoginSSO(String loginUrl, String baseUrl, String urlHost, Dio dio, CookieJar cookieJar) async {
+  realizarLoginSSO(String loginUrl, String urlHostLogin, String baseUrl, String urlHost, Dio dio, CookieJar cookieJar) async {
     // Usa o referer da pagina expirada para evitar o popup, nao deve ser necessário depois do SSO
     var optionsGet = Options(headers: {'Referer': baseUrl + '/sigrh/expirada.jsp'});
 
@@ -277,15 +278,16 @@ class _PaginaPontoState extends State<PaginaPonto> {
       'submit': 'Submit',
     };
 
-    var headersPost = {
-      'Host': 'autenticacao.homologa.unb.br',
+    var headersPostLogin = {
+      'Host': urlHostLogin,
       'Connection': 'keep-alive',
       'Pragma': 'no-cache',
       'Cache-Control': 'no-cache',
-      'Origin': 'https://autenticacao.homologa.unb.br',
+      'Origin': 'https://'+ urlHostLogin,
       'Upgrade-Insecure-Requests': 1,
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.84 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+      'Accept':
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
       'Referer': loginUrl,
       'Accept-Encoding': 'gzip, deflate, br',
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -293,10 +295,10 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
     //continuar daqui
     var optionsPost = Options(
-        headers: headersPost,
-        contentType: Headers.formUrlEncodedContentType,
-        followRedirects: false,
-        //validateStatus: (status) {return status! < 500;}
+      headers: headersPostLogin,
+      contentType: Headers.formUrlEncodedContentType,
+      followRedirects: false,
+      //validateStatus: (status) {return status! < 500;}
     );
 
     // Post para realizar o login, o processo é o mesmo mas com post agora, usa o follow redirects
@@ -304,56 +306,21 @@ class _PaginaPontoState extends State<PaginaPonto> {
     aviso('🖥️ Realizando login'); // Realizar o Login
     Response postLogin;
     try {
-      //postLogin = await dio.post(loginSuffix,data: formDataLogin, options: optionsPost);
-      postLogin = await dio.post(loginUrl, data: formDataLogin, options: optionsPost);
+      // Post para realizar o login, deve retornar 302, ir pro catch e ser tartado como redirect
+      // feito assim pq o comportamento é anomalo, 302 não deve ser retornado de um post.
       avisoVerboso("Enviando o POST de login");
-
-      /*
-      if(postLogin.statusCode == 302){
-        var localPrimeiroRedirect = postLogin.headers.value("location");
-        cookieJar.loadForRequest(Uri.parse(localPrimeiroRedirect!));
-        var headersRedirect = {
-          'Host': 'sig.homologa.unb.br',
-          'Referer': 'https://autenticacao.homologa.unb.br/',
-        };
-        Response getRedirect = await dio.get(localPrimeiroRedirect!, options: Options(headers: headersRedirect, followRedirects: false, validateStatus: (status) {
-          return status! < 500;
-        }));
-        avisoVerboso("Enviando o GET do primeiro redirect");
-
-        if(getRedirect.statusCode == 302){
-          var localSegundoRedirect = getRedirect.headers.value("location");
-          var headerSegundoRedirect = {
-            'Referer': 'https://autenticacao.homologa.unb.br/'
-          };
-          Response getSegundoRedirect = await dio.get(localSegundoRedirect!, options: Options(headers: headerSegundoRedirect, followRedirects: false));
-          avisoVerboso("Enviando o GET do segundo redirect");
-          if(getSegundoRedirect.statusCode == 200 && getSegundoRedirect.realUri.toString().contains("processar")){
-               var domPostLogin = parse(postLogin.data);
-              viewStateValue = buscarViewState(domPostLogin);
-
-              avisoVerboso("Post de login bem sucedido, realizando navegação");
-              // Verficiar o status após a tentativa de login e navegar de acordo
-              realizarNavegacao(postLogin.data, viewStateValue, dio, entradaSaidaSuffix, optionsPost);
-          }
-        }
-      }
-      */
-      
+      postLogin = await dio.post(loginUrl, data: formDataLogin, options: optionsPost);
     } on DioError catch (e) {
       avisoVerboso("Catch no post de login");
       var redirectResult = await followLoginRedirect(e, dio, cookieJar);
 
-      var domPostLogin = parse(redirectResult.data);
-      viewStateValue = buscarViewState(domPostLogin);
-
-      avisoVerboso("Post de login bem sucedido, realizando navegação");
       // Verficiar o status após a tentativa de login e navegar de acordo
-      realizarNavegacao(redirectResult.data, viewStateValue, dio, baseUrl+entradaSaidaSuffix, optionsPost);
+      avisoVerboso("Post de login bem sucedido, realizando navegação");
+      realizarNavegacao(redirectResult, dio, entradaSaidaSuffix, optionsPost);
     }
-   
   }
 
+  // NÂO HA GARANTIAS AQUI, EM ESTADO DE TODO
   realizarLoginAntigo(String loginUrl, String baseUrl, String urlHost, Dio dio) async {
     // Usa o referer da pagina expirada para evitar o popup, nao deve ser necessário depois do SSO
     var optionsGet = Options(headers: {'Referer': baseUrl + '/sigrh/expirada.jsp'});
@@ -419,22 +386,20 @@ class _PaginaPontoState extends State<PaginaPonto> {
       avisoVerboso("Catch no post de login");
       postLogin = await followRedirect(e, dio);
     }
-    var domPostLogin = parse(postLogin.data);
-    viewStateValue = buscarViewState(domPostLogin);
 
     avisoVerboso("Post de login bem sucedido, realizando navegação");
     // Verficiar o status após a tentativa de login e navegar de acordo
-    realizarNavegacao(postLogin.data, viewStateValue, dio, entradaSaidaSuffix, optionsPost);
+    realizarNavegacao(postLogin, dio, entradaSaidaSuffix, optionsPost);
   }
 
   // verifica onde o login foi parar, tipicamente na página de ponto, mas pode ser outro lugar
   // determina o que fazer a partir daí, navegar para a página de ponto ou bater o ponto.
   // é aqui que o aplicativo descobre se ele ta batendo o ponto de entrada ou saída
-  void realizarNavegacao(String postLoginData, String viewStateValue, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
-    var domPostLogin = parse(postLoginData);
+  void realizarNavegacao(Response postLoginData, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
+    var domPostLogin = parse(postLoginData.data);
     var viewStateNavegacao = buscarViewState(domPostLogin);
 
-    if (postLoginData.contains('autenticar-se novamente')) {
+    if (postLoginData.data.contains('autenticar-se novamente')) {
       avisoErro('⛔ Sessão expirada, tente novamente');
       return;
     } else {
@@ -462,9 +427,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       selecionarUnidade(viewStateNavegacao, dio, servidorSuffix, optionsPost, domPostLogin);
     } else {
       var voltaParaInicio = await dio.get(servidorSuffix);
-      var domVoltaParaInicio = parse(voltaParaInicio.data);
-      var viewStateVolta = buscarViewState(domVoltaParaInicio);
-      realizarNavegacao(voltaParaInicio.data, viewStateVolta, dio, entradaSaidaRadix, optionsPost);
+      realizarNavegacao(voltaParaInicio, dio, entradaSaidaRadix, optionsPost);
     }
   }
 
@@ -479,7 +442,12 @@ class _PaginaPontoState extends State<PaginaPonto> {
     });
     aviso('🚪 Realizando Entrada');
     avisoVerboso("Mandando o post de entrada");
-    var postEntrada = await dio.post(entradaSaidaRadix, data: formDataEntrada, options: optionsPost);
+    var postEntrada;
+    try {
+      postEntrada = await dio.post(entradaSaidaRadix, data: formDataEntrada, options: optionsPost);
+    } catch (e) {
+      avisoVerboso('catch no post de entrada');
+    }
     var domPostEntrada = parse(postEntrada.data);
 
     var msgErro = domPostEntrada.querySelectorAll('ul.erros > li');
@@ -581,9 +549,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     } on DioError catch (e) {
       paginaPonto = await followRedirect(e, dio);
     }
-    var domPaginaPonto = parse(paginaPonto.data);
-    var viewState = buscarViewState(domPaginaPonto);
-    realizarNavegacao(paginaPonto.data, viewState, dio, entradaSaidaSuffix, optionsPost);
+    realizarNavegacao(paginaPonto, dio, entradaSaidaSuffix, optionsPost);
   }
 
   // nao é preciso interagir com o dropdown, apenas colocar o valor correto nos dados do form
@@ -609,9 +575,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       });
       // Código preenchido realizar a navegação daí.
       var paginaPonto = await dio.post(unidadeSuffix, data: formDataUnidade, options: optionsPost);
-      var domPaginaPonto = parse(paginaPonto.data);
-      var viewStateUnidade = buscarViewState(domPaginaPonto);
-      realizarNavegacao(paginaPonto.data, viewStateUnidade, dio, entradaSaidaSuffix, optionsPost);
+      realizarNavegacao(paginaPonto, dio, entradaSaidaSuffix, optionsPost);
     }
   }
 
@@ -640,7 +604,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     }
   }
 
-    // Segue os redirects de posts em 302, gets ele ja segue automatico
+  // Segue os redirects de posts em 302, gets ele ja segue automatico
   Future followLoginRedirect(DioError e, Dio dio, CookieJar cookieJar) async {
     if (e.response != null && e.response!.statusCode == 302) {
       var locationRedirect = e.response!.headers.value('location');
