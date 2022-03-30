@@ -53,6 +53,8 @@ class _PaginaPontoState extends State<PaginaPonto> {
   /*                             Switch de Ambiente                             */
   /* -------------------------------------------------------------------------- */
   bool desenvolvimento = true;
+  bool verbose = true;
+  bool sso = true;
 
   // Valores para as credenciais, vem do shared prefs
   static String login = '';
@@ -171,39 +173,39 @@ class _PaginaPontoState extends State<PaginaPonto> {
   /*                                 Bater Ponto                                */
   /* -------------------------------------------------------------------------- */
   Future baterPonto() async {
+    var loginUrl = desenvolvimento
+        ? 'https://autenticacao.homologa.unb.br/sso-server/login?service=https%3A%2F%2Fsig.homologa.unb.br%2Fsigrh%2Flogin%2Fcas'
+        : 'https://autenticacao.unb.br/sso-server/login?service=https%3A%2F%2Fsig.unb.br%2Fsigrh%2Flogin%2Fcas';
+
     var baseUrl = '';
-    setState(() {
-      confirmacao = false;
-    });
     if (desenvolvimento) {
       baseUrl = 'https://sig.homologa.unb.br';
-      // final BaseUrl = 'https://sig.desenv.unb.br';
-      // final BaseUrl = 'https://sig.treinamento.unb.br';
     } else {
       baseUrl = 'https://sig.unb.br';
     }
 
     // host é um header obrigatório para o post
     final urlHost = baseUrl.replaceAll('https://', '');
-    final cookieJar = CookieJar();
 
     // aqui ele busca os dados que vieram do shared prefs
     // mudar para colocar direto do shared prefs e deletar
     // os controladores inuteis
     setState(() {
+      confirmacao = false;
       login = loginController.text;
       pass = passController.text;
       codigoUnidade = codigoController.text;
     });
 
     // Configurar a instância do Dio.
-    BaseOptions optionsDio = BaseOptions(baseUrl: baseUrl);
+    BaseOptions optionsDio = BaseOptions();
     Dio dio = Dio(optionsDio);
-    /* -------- LIGAR ESSA VERSÃO PARA VER OS CHAMADOS DO DIO NO CONSOLE -------- */
-    // dio.interceptors..add(CookieManager(cookieJar))..add(LogInterceptor());
 
     /* ------------ adiciona o gerenciador de cookies no cliente http ----------- */
-    dio.interceptors..add(CookieManager(cookieJar));
+    var cookieJar=CookieJar();
+    dio.interceptors.add(CookieManager(cookieJar));
+    /* -------- LIGAR ESSA VERSÃO PARA VER OS CHAMADOS DO DIO NO CONSOLE -------- */
+    // dio.interceptors..add(CookieManager(cookieJar))..add(LogInterceptor());
 
     // Esse codigo ignora avisos de bad certificate.
     (dio.httpClientAdapter as DefaultHttpClientAdapter).onHttpClientCreate = (client) {
@@ -216,6 +218,143 @@ class _PaginaPontoState extends State<PaginaPonto> {
       isLoading = true;
       textoAviso = '📡 Buscando a página de login\n';
     });
+    if (sso) {
+      realizarLoginSSO(loginUrl, baseUrl, urlHost, dio, cookieJar);
+    } else {
+      realizarLoginAntigo(loginUrl, baseUrl, urlHost, dio);
+    }
+  }
+
+  realizarLoginSSO(String loginUrl, String baseUrl, String urlHost, Dio dio, CookieJar cookieJar) async {
+    // Usa o referer da pagina expirada para evitar o popup, nao deve ser necessário depois do SSO
+    var optionsGet = Options(headers: {'Referer': baseUrl + '/sigrh/expirada.jsp'});
+
+    // Busca a Página de Login
+    var getLogin;
+    try {
+      getLogin = await dio.get(loginUrl, options: optionsGet);
+      avisoVerboso("navegando para a página de login");
+    } on DioError catch (e) {
+      avisoErro('⛔ Erro ao recuperar a página de login, verifique a sua conexão de internet');
+      return;
+    }
+
+    var domGetLogin = parse(getLogin.data);
+    avisoVerboso("Realizando o parse da página de login");
+
+    //buscar lt e execution
+    var lt = '';
+    var execution = '';
+    var viewStateValue = '';
+
+    var domLt = domGetLogin.querySelectorAll('input[name="lt"]');
+    var domExecution = domGetLogin.querySelectorAll('input[name="execution"]');
+
+    if (domLt.length > 0) {
+      lt = domLt[0].attributes['value'].toString();
+    } else {
+      // Erro de login
+      avisoErro('⛔ Erro ao recuperar informações da página de login');
+      avisoVerboso('Erro ao recuperar lt da página do sigle sign on');
+      return;
+    }
+
+    if (domExecution.length > 0) {
+      execution = domExecution[0].attributes['value'].toString();
+    } else {
+      // Erro de login
+      avisoErro('⛔ Erro ao recuperar informações da página de login');
+      avisoVerboso('Erro ao recuperar lt da página do sigle sign on');
+      return;
+    }
+
+    var formDataLogin = {
+      'username': login,
+      'password': pass,
+      'lt': lt,
+      'execution': execution,
+      '_eventId': 'submit',
+      'submit': 'Submit',
+    };
+
+    var headersPost = {
+      'Host': 'autenticacao.homologa.unb.br',
+      'Connection': 'keep-alive',
+      'Pragma': 'no-cache',
+      'Cache-Control': 'no-cache',
+      'Origin': 'https://autenticacao.homologa.unb.br',
+      'Upgrade-Insecure-Requests': 1,
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.84 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+      'Referer': loginUrl,
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+    };
+
+    //continuar daqui
+    var optionsPost = Options(
+        headers: headersPost,
+        contentType: Headers.formUrlEncodedContentType,
+        followRedirects: false,
+        //validateStatus: (status) {return status! < 500;}
+    );
+
+    // Post para realizar o login, o processo é o mesmo mas com post agora, usa o follow redirects
+    // que é uma funcao recursiva que faz as chamadas para o endereco colocado no header location da resposta
+    aviso('🖥️ Realizando login'); // Realizar o Login
+    Response postLogin;
+    try {
+      //postLogin = await dio.post(loginSuffix,data: formDataLogin, options: optionsPost);
+      postLogin = await dio.post(loginUrl, data: formDataLogin, options: optionsPost);
+      avisoVerboso("Enviando o POST de login");
+
+      /*
+      if(postLogin.statusCode == 302){
+        var localPrimeiroRedirect = postLogin.headers.value("location");
+        cookieJar.loadForRequest(Uri.parse(localPrimeiroRedirect!));
+        var headersRedirect = {
+          'Host': 'sig.homologa.unb.br',
+          'Referer': 'https://autenticacao.homologa.unb.br/',
+        };
+        Response getRedirect = await dio.get(localPrimeiroRedirect!, options: Options(headers: headersRedirect, followRedirects: false, validateStatus: (status) {
+          return status! < 500;
+        }));
+        avisoVerboso("Enviando o GET do primeiro redirect");
+
+        if(getRedirect.statusCode == 302){
+          var localSegundoRedirect = getRedirect.headers.value("location");
+          var headerSegundoRedirect = {
+            'Referer': 'https://autenticacao.homologa.unb.br/'
+          };
+          Response getSegundoRedirect = await dio.get(localSegundoRedirect!, options: Options(headers: headerSegundoRedirect, followRedirects: false));
+          avisoVerboso("Enviando o GET do segundo redirect");
+          if(getSegundoRedirect.statusCode == 200 && getSegundoRedirect.realUri.toString().contains("processar")){
+               var domPostLogin = parse(postLogin.data);
+              viewStateValue = buscarViewState(domPostLogin);
+
+              avisoVerboso("Post de login bem sucedido, realizando navegação");
+              // Verficiar o status após a tentativa de login e navegar de acordo
+              realizarNavegacao(postLogin.data, viewStateValue, dio, entradaSaidaSuffix, optionsPost);
+          }
+        }
+      }
+      */
+      
+    } on DioError catch (e) {
+      avisoVerboso("Catch no post de login");
+      var redirectResult = await followLoginRedirect(e, dio, cookieJar);
+
+      var domPostLogin = parse(redirectResult.data);
+      viewStateValue = buscarViewState(domPostLogin);
+
+      avisoVerboso("Post de login bem sucedido, realizando navegação");
+      // Verficiar o status após a tentativa de login e navegar de acordo
+      realizarNavegacao(redirectResult.data, viewStateValue, dio, baseUrl+entradaSaidaSuffix, optionsPost);
+    }
+   
+  }
+
+  realizarLoginAntigo(String loginUrl, String baseUrl, String urlHost, Dio dio) async {
     // Usa o referer da pagina expirada para evitar o popup, nao deve ser necessário depois do SSO
     var optionsGet = Options(headers: {'Referer': baseUrl + '/sigrh/expirada.jsp'});
 
@@ -223,13 +362,15 @@ class _PaginaPontoState extends State<PaginaPonto> {
     var getLogin;
     try {
       getLogin = await dio.get(loginSuffix, options: optionsGet);
+      avisoVerboso("navegando para a página de login");
     } on DioError catch (e) {
       avisoErro('⛔ Erro ao recuperar a página de login, verifique a sua conexão de internet');
       return;
     }
-    // o resultado do get é o response, os dados correspondem ao html retornado
+
     // em cada requisicao em faço o parse do html recebido e trabalho ele no formato DOM
     var domGetLogin = parse(getLogin.data);
+    avisoVerboso("Realizando o parse da página de login");
 
     // O view state é um valor que o jsf mantem para rastrear as navegações, é preciso obte-lo para
     // fazer as chamadas subsequentes
@@ -258,27 +399,30 @@ class _PaginaPontoState extends State<PaginaPonto> {
       'Upgrade-Insecure-Requests': 1,
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.108 Safari/537.36',
-      'Accept':
-          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3',
       'Referer': baseUrl + '/sigrh/expirada.jsp',
       'Accept-Encoding': 'gzip, deflate, br',
       'Accept-Language': 'en-US,en;q=0.9,pt;q=0.8',
     };
 
-    var optionsPost = Options(headers: headersPost);
+    var optionsPost = Options(headers: headersPost, followRedirects: false);
 
     // Post para realizar o login, o processo é o mesmo mas com post agora, usa o follow redirects
     // que é uma funcao recursiva que faz as chamadas para o endereco colocado no header location da resposta
     aviso('🖥️ Realizando login'); // Realizar o Login
     var postLogin;
     try {
+      //postLogin = await dio.post(loginSuffix,data: formDataLogin, options: optionsPost);
       postLogin = await dio.post(loginSuffix, data: formDataLogin, options: optionsPost);
+      avisoVerboso("Enviando o POST de login");
     } on DioError catch (e) {
+      avisoVerboso("Catch no post de login");
       postLogin = await followRedirect(e, dio);
     }
     var domPostLogin = parse(postLogin.data);
     viewStateValue = buscarViewState(domPostLogin);
 
+    avisoVerboso("Post de login bem sucedido, realizando navegação");
     // Verficiar o status após a tentativa de login e navegar de acordo
     realizarNavegacao(postLogin.data, viewStateValue, dio, entradaSaidaSuffix, optionsPost);
   }
@@ -286,8 +430,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
   // verifica onde o login foi parar, tipicamente na página de ponto, mas pode ser outro lugar
   // determina o que fazer a partir daí, navegar para a página de ponto ou bater o ponto.
   // é aqui que o aplicativo descobre se ele ta batendo o ponto de entrada ou saída
-  void realizarNavegacao(
-      String postLoginData, String viewStateValue, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
+  void realizarNavegacao(String postLoginData, String viewStateValue, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
     var domPostLogin = parse(postLoginData);
     var viewStateNavegacao = buscarViewState(domPostLogin);
 
@@ -302,6 +445,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       }
     }
 
+    avisoVerboso("Descobrindo onde entrou e indo pra pagina de ponto");
     /* --- basicamente o switch pra saber onde está e o que fazer a partir dai -- */
     // tirei o logoff por algum motivo, nao lembro por que
     if (domPostLogin.querySelectorAll('input[name="idFormDadosEntradaSaida:idBtnRegistrarEntrada"]').length > 0) {
@@ -334,6 +478,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       'javax.faces.ViewState': viewState,
     });
     aviso('🚪 Realizando Entrada');
+    avisoVerboso("Mandando o post de entrada");
     var postEntrada = await dio.post(entradaSaidaRadix, data: formDataEntrada, options: optionsPost);
     var domPostEntrada = parse(postEntrada.data);
 
@@ -350,21 +495,17 @@ class _PaginaPontoState extends State<PaginaPonto> {
     var horasRegistradas = buscarHorasRegistradas(domPostEntrada);
     if (horasRegistradas.length > 0) {
       if (horasRegistradas[0] != '00:00') {
-        DateTime tempoMinimoSaida =
-            getTempoMinimoAteSaida(horasRegistradas, getHorasRegime(), ultimaEntrada).subtract(Duration(minutes: 15));
+        DateTime tempoMinimoSaida = getTempoMinimoAteSaida(horasRegistradas, getHorasRegime(), ultimaEntrada).subtract(Duration(minutes: 15));
         var textoAvisoExpediente = 'Horário mínimo de saída atingido';
         if (avisarSaidaAntes) {
           tempoMinimoSaida = tempoMinimoSaida.subtract(Duration(minutes: 5));
           textoAvisoExpediente = 'Fim do expediente em 5 minutos';
         }
-        marcarNotificacao(
-            Notificacoes.saida_dia.index, tempoMinimoSaida.hour, tempoMinimoSaida.minute, textoAvisoExpediente, 'Lembrete');
+        marcarNotificacao(Notificacoes.saida_dia.index, tempoMinimoSaida.hour, tempoMinimoSaida.minute, textoAvisoExpediente, 'Lembrete');
       }
-      var textoHorasRegistradas =
-          '\n\n\n⏱️ Horas Registradas: ' + horasRegistradas[0] + '\n⏰ Horas Contabilizadas: ' + horasRegistradas[1];
+      var textoHorasRegistradas = '\n\n\n⏱️ Horas Registradas: ' + horasRegistradas[0] + '\n⏰ Horas Contabilizadas: ' + horasRegistradas[1];
       aviso(textoHorasRegistradas);
-      var textoHorarioMinimoSaida =
-          '⌚ Horario Mínimo de Saída: ' + getTextoHorarioMinimoSaida(horasRegistradas, getHorasRegime(), ultimaEntrada);
+      var textoHorarioMinimoSaida = '⌚ Horario Mínimo de Saída: ' + getTextoHorarioMinimoSaida(horasRegistradas, getHorasRegime(), ultimaEntrada);
 
       aviso(textoHorarioMinimoSaida);
       _saveTimetable(horarios.toString() + textoHorasRegistradas + '\n' + textoHorarioMinimoSaida);
@@ -397,6 +538,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       aviso('🎉 Realizando Saída');
     }
 
+    avisoVerboso("Descobrindo onde entrou e indo pra pagina de ponto");
     var postSaida = await dio.post(entradaSaidaRadix, data: formDataEntrada, options: optionsPost);
     var domPostSaida = parse(postSaida.data);
 
@@ -410,16 +552,15 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
     var horasRegistradas = buscarHorasRegistradas(domPostSaida);
     if (horasRegistradas.length > 0) {
-      var textoHorasRegistradas =
-          '\n\n\n⏱️ Horas Registradas: ' + horasRegistradas[0] + '\n⏰ Horas Contabilizadas: ' + horasRegistradas[1];
+      var textoHorasRegistradas = '\n\n\n⏱️ Horas Registradas: ' + horasRegistradas[0] + '\n⏰ Horas Contabilizadas: ' + horasRegistradas[1];
       aviso(textoHorasRegistradas);
       _saveTimetable(horarios.toString() + textoHorasRegistradas);
     }
 
     // Marcar o push notification, roda sempre em desenv
     if (desenvolvimento || almoco) {
-      marcarNotificacao(Notificacoes.saida_almoco.index, tempoAviso.hour, tempoAviso.minute,
-          'Horário mínimo de saída de almoço atingido', 'Lembrete');
+      marcarNotificacao(
+          Notificacoes.saida_almoco.index, tempoAviso.hour, tempoAviso.minute, 'Horário mínimo de saída de almoço atingido', 'Lembrete');
     }
 
     setState(() {
@@ -450,8 +591,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     if (codigoUnidade.isEmpty) {
       var opcoes = dom.querySelectorAll('select[name="selecionarUnidadeForm:unidade"]>option:not([disabled])');
       if (opcoes.length > 0) {
-        aviso(
-            '👁️‍🗨️ Para selecionar a unidade permanentemente preencha o código da unidade escolhida no formulário de login\n');
+        aviso('👁️‍🗨️ Para selecionar a unidade permanentemente preencha o código da unidade escolhida no formulário de login\n');
         opcoes.forEach((o) => {
               if (o.text.indexOf('SELECIONE') == -1) {aviso('codigo: ' + o.attributes['value'].toString() + ' ' + o.text)}
             });
@@ -500,6 +640,20 @@ class _PaginaPontoState extends State<PaginaPonto> {
     }
   }
 
+    // Segue os redirects de posts em 302, gets ele ja segue automatico
+  Future followLoginRedirect(DioError e, Dio dio, CookieJar cookieJar) async {
+    if (e.response != null && e.response!.statusCode == 302) {
+      var locationRedirect = e.response!.headers.value('location');
+      cookieJar.loadForRequest(Uri.parse(locationRedirect!));
+      try {
+        var redirect = await dio.get(locationRedirect, options: Options(followRedirects: false));
+        return redirect;
+      } on DioError catch (e) {
+        return followLoginRedirect(e, dio, cookieJar);
+      }
+    }
+  }
+
   // extrai do dom o valor do view state
   String buscarViewState(Document pagina) {
     var inputViewState = pagina.getElementsByTagName('input');
@@ -544,8 +698,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
   String getTextoHorarioMinimoSaida(List<String> horasRegistradas, int horasRegime, String ultimaEntrada) {
     var dateSub = getTempoMinimoAteSaida(horasRegistradas, horasRegime, ultimaEntrada);
-    var timeUltimaEntrada =
-        DateTime.utc(2000, 1, 1, int.parse(ultimaEntrada.split(':')[0]), int.parse(ultimaEntrada.split(':')[1]));
+    var timeUltimaEntrada = DateTime.utc(2000, 1, 1, int.parse(ultimaEntrada.split(':')[0]), int.parse(ultimaEntrada.split(':')[1]));
     var dateReturn = timeUltimaEntrada.add(Duration(hours: dateSub.hour));
     dateReturn = dateReturn.add(Duration(minutes: dateSub.minute));
     dateReturn = dateReturn.subtract(const Duration(minutes: 15));
@@ -643,6 +796,12 @@ class _PaginaPontoState extends State<PaginaPonto> {
     setState(() {
       isLoading = false;
     });
+  }
+
+  void avisoVerboso(String texto) {
+    if (verbose) {
+      aviso(texto);
+    }
   }
 
   /* -------------------------------------------------------------------------- */
