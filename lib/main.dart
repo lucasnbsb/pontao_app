@@ -53,7 +53,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
   /*                             Switch de Ambiente                             */
   /* -------------------------------------------------------------------------- */
   bool desenvolvimento = true;
-  bool verbose = true;
+  bool verbose = false;
   bool sso = true;
 
   // Valores para as credenciais, vem do shared prefs
@@ -220,7 +220,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       textoAviso = '📡 Buscando a página de login\n';
     });
     if (sso) {
-      realizarLoginSSO(loginUrl, urlHostLogin , baseUrl, urlHost, dio, cookieJar);
+      realizarLoginSSO(loginUrl, urlHostLogin, baseUrl, urlHost, dio, cookieJar);
     } else {
       realizarLoginAntigo(loginUrl, baseUrl, urlHost, dio);
     }
@@ -283,7 +283,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       'Connection': 'keep-alive',
       'Pragma': 'no-cache',
       'Cache-Control': 'no-cache',
-      'Origin': 'https://'+ urlHostLogin,
+      'Origin': 'https://' + urlHostLogin,
       'Upgrade-Insecure-Requests': 1,
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.84 Safari/537.36',
       'Accept':
@@ -294,7 +294,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     };
 
     //continuar daqui
-    var optionsPost = Options(
+    var optionsPostLogin = Options(
       headers: headersPostLogin,
       contentType: Headers.formUrlEncodedContentType,
       followRedirects: false,
@@ -309,14 +309,40 @@ class _PaginaPontoState extends State<PaginaPonto> {
       // Post para realizar o login, deve retornar 302, ir pro catch e ser tartado como redirect
       // feito assim pq o comportamento é anomalo, 302 não deve ser retornado de um post.
       avisoVerboso("Enviando o POST de login");
-      postLogin = await dio.post(loginUrl, data: formDataLogin, options: optionsPost);
+      postLogin = await dio.post(loginUrl, data: formDataLogin, options: optionsPostLogin);
     } on DioError catch (e) {
       avisoVerboso("Catch no post de login");
       var redirectResult = await followLoginRedirect(e, dio, cookieJar);
 
       // Verficiar o status após a tentativa de login e navegar de acordo
       avisoVerboso("Post de login bem sucedido, realizando navegação");
-      realizarNavegacao(redirectResult, dio, entradaSaidaSuffix, optionsPost);
+
+      // antes de realizar a navegação, montar o mapa de opções para a operação do sistema daqui pra frente,
+      // o login é completamente diferente das outras operações
+
+      var headers = {
+        'Host': urlHost,
+        'Origin': baseUrl,
+        'Referer': baseUrl + '/',
+        'Connection': 'keep-alive',
+        'Pragma': 'no-cache',
+        'Cache-Control': 'no-cache',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Upgrade-Insecure-Requests': 1,
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.84 Safari/537.36',
+        'Accept':
+            'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+      };
+
+      var options = Options(
+        headers: headers,
+        contentType: Headers.formUrlEncodedContentType,
+        followRedirects: true,
+        //validateStatus: (status) {return status! < 500;}
+      );
+
+      realizarNavegacao(redirectResult, dio, entradaSaidaSuffix, options, cookieJar);
     }
   }
 
@@ -389,13 +415,13 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
     avisoVerboso("Post de login bem sucedido, realizando navegação");
     // Verficiar o status após a tentativa de login e navegar de acordo
-    realizarNavegacao(postLogin, dio, entradaSaidaSuffix, optionsPost);
+    // realizarNavegacao(postLogin, dio, entradaSaidaSuffix, optionsPost);
   }
 
   // verifica onde o login foi parar, tipicamente na página de ponto, mas pode ser outro lugar
   // determina o que fazer a partir daí, navegar para a página de ponto ou bater o ponto.
   // é aqui que o aplicativo descobre se ele ta batendo o ponto de entrada ou saída
-  void realizarNavegacao(Response postLoginData, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
+  void realizarNavegacao(Response postLoginData, Dio dio, String entradaSaidaRadix, Options optionsPost, CookieJar cookieJar) async {
     var domPostLogin = parse(postLoginData.data);
     var viewStateNavegacao = buscarViewState(domPostLogin);
 
@@ -415,38 +441,39 @@ class _PaginaPontoState extends State<PaginaPonto> {
     // tirei o logoff por algum motivo, nao lembro por que
     if (domPostLogin.querySelectorAll('input[name="idFormDadosEntradaSaida:idBtnRegistrarEntrada"]').length > 0) {
       aviso('⛵ Realizando Navegação');
-      realizarEntrada(viewStateNavegacao, dio, entradaSaidaRadix, optionsPost);
+      realizarEntrada(viewStateNavegacao, dio, entradaSaidaRadix, optionsPost, cookieJar);
       // realizarLogoff(dio, optionsPost);
     } else if (domPostLogin.querySelectorAll('input[name="idFormDadosEntradaSaida:idBtnRegistrarSaida"]').length > 0) {
       aviso('⛵ Realizando Navegação');
-      realizarSaida(viewStateNavegacao, dio, entradaSaidaRadix, optionsPost);
+      realizarSaida(viewStateNavegacao, dio, entradaSaidaRadix, optionsPost, cookieJar);
       // realizarLogoff(dio, optionsPost);
     } else if (domPostLogin.querySelectorAll('form[name="painelAcessoDadosServidor"]').length > 0) {
-      navegarParaPonto(viewStateNavegacao, dio, servidorSuffix, optionsPost);
+      navegarParaPonto(viewStateNavegacao, dio, servidorSuffix, optionsPost, cookieJar);
     } else if (domPostLogin.querySelectorAll('select[name="selecionarUnidadeForm:unidade"]').length > 0) {
-      selecionarUnidade(viewStateNavegacao, dio, servidorSuffix, optionsPost, domPostLogin);
+      selecionarUnidade(viewStateNavegacao, dio, servidorSuffix, optionsPost, domPostLogin, cookieJar);
     } else {
       var voltaParaInicio = await dio.get(servidorSuffix);
-      realizarNavegacao(voltaParaInicio, dio, entradaSaidaRadix, optionsPost);
+      realizarNavegacao(voltaParaInicio, dio, entradaSaidaRadix, optionsPost, cookieJar);
     }
   }
 
   // bate o pojnto para a entrada, mmetade do método é o post e a outra
   // é buscar os horários registgrados e calcular o horario de saida
-  Future realizarEntrada(String viewState, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
-    FormData formDataEntrada = FormData.fromMap({
+  Future realizarEntrada(String viewState, Dio dio, String entradaSaidaRadix, Options optionsPost, CookieJar cookieJar) async {
+    var formDataEntrada = {
       'idFormDadosEntradaSaida': 'idFormDadosEntradaSaida',
       'idFormDadosEntradaSaida:observacoes': '',
       'idFormDadosEntradaSaida:idBtnRegistrarEntrada': 'Registrar Entrada',
       'javax.faces.ViewState': viewState,
-    });
+    };
     aviso('🚪 Realizando Entrada');
     avisoVerboso("Mandando o post de entrada");
     var postEntrada;
     try {
       postEntrada = await dio.post(entradaSaidaRadix, data: formDataEntrada, options: optionsPost);
-    } catch (e) {
+    } on DioError catch (e) {
       avisoVerboso('catch no post de entrada');
+      //postEntrada = await followLoginRedirect(e, dio, cookieJar);
     }
     var domPostEntrada = parse(postEntrada.data);
 
@@ -486,19 +513,19 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
   //  só faz saida para almoço se o regime for 8 horas e o check estiver marcado e for hora de almoço
   //  funcionamento analogo ao metodo de realizar entradas
-  Future realizarSaida(String viewState, Dio dio, String entradaSaidaRadix, Options optionsPost) async {
+  Future realizarSaida(String viewState, Dio dio, String entradaSaidaRadix, Options optionsPost, CookieJar cookieJar) async {
     var almoco = false;
     if (regimeIsSelected[3]) {
       almoco = saidaAlmocoSePossivel && isHoraAlmoco();
     }
 
-    FormData formDataEntrada = FormData.fromMap({
+    var formDataEntrada = {
       'idFormDadosEntradaSaida': 'idFormDadosEntradaSaida',
       'idFormDadosEntradaSaida:observacoes': '',
       'idFormDadosEntradaSaida:saidaAlmoco': almoco.toString(),
       'idFormDadosEntradaSaida:idBtnRegistrarSaida': 'Registrar Saída',
       'javax.faces.ViewState': viewState,
-    });
+    };
 
     if (desenvolvimento || almoco) {
       aviso(textoSaidaParaAlmoco());
@@ -537,7 +564,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
   }
 
   // Move a navegacao para a pagina de registro de ponto
-  Future navegarParaPonto(String viewStateAnterior, Dio dio, String servidorRadix, Options optionsPost) async {
+  Future navegarParaPonto(String viewStateAnterior, Dio dio, String servidorRadix, Options optionsPost, CookieJar cookieJar) async {
     FormData formDataPonto = FormData.fromMap({
       'painelAcessoDadosServidor': 'painelAcessoDadosServidor',
       'painelAcessoDadosServidor:linkPontoEletronicoAntigo': 'painelAcessoDadosServidor:linkPontoEletronicoAntigo',
@@ -549,11 +576,11 @@ class _PaginaPontoState extends State<PaginaPonto> {
     } on DioError catch (e) {
       paginaPonto = await followRedirect(e, dio);
     }
-    realizarNavegacao(paginaPonto, dio, entradaSaidaSuffix, optionsPost);
+    realizarNavegacao(paginaPonto, dio, entradaSaidaSuffix, optionsPost, cookieJar);
   }
 
   // nao é preciso interagir com o dropdown, apenas colocar o valor correto nos dados do form
-  Future selecionarUnidade(String viewStateAnterior, Dio dio, String servidorRadix, Options optionsPost, Document dom) async {
+  Future selecionarUnidade(String viewStateAnterior, Dio dio, String servidorRadix, Options optionsPost, Document dom, CookieJar cookieJar) async {
     if (codigoUnidade.isEmpty) {
       var opcoes = dom.querySelectorAll('select[name="selecionarUnidadeForm:unidade"]>option:not([disabled])');
       if (opcoes.length > 0) {
@@ -575,7 +602,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       });
       // Código preenchido realizar a navegação daí.
       var paginaPonto = await dio.post(unidadeSuffix, data: formDataUnidade, options: optionsPost);
-      realizarNavegacao(paginaPonto, dio, entradaSaidaSuffix, optionsPost);
+      realizarNavegacao(paginaPonto, dio, entradaSaidaSuffix, optionsPost, cookieJar);
     }
   }
 
@@ -623,9 +650,9 @@ class _PaginaPontoState extends State<PaginaPonto> {
     var inputViewState = pagina.getElementsByTagName('input');
     var viewStateValue = '';
     inputViewState.forEach((input) => {
-          if (input.parent!.id == 'javax.faces.ViewState')
+          if (input.attributes['id'] == 'javax.faces.ViewState')
             {
-              viewStateValue = input.parent!.attributes['value'].toString(),
+              viewStateValue = input.attributes['value'].toString(),
             }
         });
     return viewStateValue;
@@ -708,7 +735,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
   List<String> buscarHorasRegistradas(Document dom) {
     // retorna um array com [horas registradas, horas contabilizadas] formato HH:mm
     var horas = dom.querySelectorAll('tfoot > tr >td[style="font-weight: bold;"]');
-    var retorno = List.empty();
+    var retorno = List.empty(growable: true);
     if (horas.length >= 2) {
       retorno.add(horas[0].innerHtml);
       retorno.add(horas[1].innerHtml);
