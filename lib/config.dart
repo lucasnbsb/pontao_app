@@ -173,7 +173,7 @@ class _PaginaConfiguracaoState extends State<PaginaConfiguracao> {
                   },
                   secondary: avisarSaidaAntes ? const Icon(Icons.directions_run) : const Icon(Icons.directions_walk)),
               RaisedButton(
-                  child: Text('Notificar o retorno do almoço após ' + tempoAviso.format(context),
+                  child: Text('Avisar o retorno do almoço após ' + tempoAviso.format(context) + ' hora(s)',
                       style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                   textColor: Colors.white,
                   onPressed: () => {
