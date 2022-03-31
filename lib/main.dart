@@ -104,6 +104,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     super.initState();
     _loadCredentials();
     _loadTimetable();
+    inicializarPluginNotificacoes();
   }
 
   _loadTimetable() async {
@@ -310,21 +311,20 @@ class _PaginaPontoState extends State<PaginaPonto> {
       // feito assim pq o comportamento é anomalo, 302 não deve ser retornado de um post.
       avisoVerboso("Enviando o POST de login");
       postLogin = await dio.post(loginUrl, data: formDataLogin, options: optionsPostLogin);
-      
-      if(postLogin.statusCode == 200 && postLogin.data.toString().contains("Credenciais inválidas")){
+
+      if (postLogin.statusCode == 200 && postLogin.data.toString().contains("Credenciais inválidas")) {
         aviso('⛔ Credenciais inválidas, cheque seu login e senha');
         setState(() {
           isLoading = false;
         });
-        
+
         return;
       }
-
     } on DioError catch (e) {
       avisoVerboso("Catch no post de login");
       Response redirectResult = await followLoginRedirect(e, dio, cookieJar);
-      
-      if(redirectResult.statusCode == 200){
+
+      if (redirectResult.statusCode == 200) {
         aviso('✅ Login bem sucedido');
       }
       // Verficiar o status após a tentativa de login e navegar de acordo
