@@ -52,7 +52,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
   /* -------------------------------------------------------------------------- */
   /*                             Switch de Ambiente                             */
   /* -------------------------------------------------------------------------- */
-  bool desenvolvimento = true;
+  bool desenvolvimento = false;
   bool verbose = false;
   bool sso = true;
 
@@ -186,7 +186,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
     // host é um header obrigatório para o post
     final urlHost = baseUrl.replaceAll('https://', '');
-    final urlHostLogin = desenvolvimento ? 'autenticacao.homologa.unb.br' : 'TODO';
+    final urlHostLogin = desenvolvimento ? 'autenticacao.homologa.unb.br' : 'autenticacao.unb.br';
 
     // aqui ele busca os dados que vieram do shared prefs
     // mudar para colocar direto do shared prefs e deletar
@@ -310,10 +310,23 @@ class _PaginaPontoState extends State<PaginaPonto> {
       // feito assim pq o comportamento é anomalo, 302 não deve ser retornado de um post.
       avisoVerboso("Enviando o POST de login");
       postLogin = await dio.post(loginUrl, data: formDataLogin, options: optionsPostLogin);
+      
+      if(postLogin.statusCode == 200 && postLogin.data.toString().contains("Credenciais inválidas")){
+        aviso('⛔ Credenciais inválidas, cheque seu login e senha');
+        setState(() {
+          isLoading = false;
+        });
+        
+        return;
+      }
+
     } on DioError catch (e) {
       avisoVerboso("Catch no post de login");
-      var redirectResult = await followLoginRedirect(e, dio, cookieJar);
-
+      Response redirectResult = await followLoginRedirect(e, dio, cookieJar);
+      
+      if(redirectResult.statusCode == 200){
+        aviso('✅ Login bem sucedido');
+      }
       // Verficiar o status após a tentativa de login e navegar de acordo
       avisoVerboso("Post de login bem sucedido, realizando navegação");
 
@@ -440,16 +453,18 @@ class _PaginaPontoState extends State<PaginaPonto> {
     /* --- basicamente o switch pra saber onde está e o que fazer a partir dai -- */
     // tirei o logoff por algum motivo, nao lembro por que
     if (domPostLogin.querySelectorAll('input[name="idFormDadosEntradaSaida:idBtnRegistrarEntrada"]').length > 0) {
-      aviso('⛵ Realizando Navegação');
+      aviso('🛳 Navegando para página de entrada');
       realizarEntrada(viewStateNavegacao, dio, entradaSaidaRadix, optionsPost, cookieJar);
       // realizarLogoff(dio, optionsPost);
     } else if (domPostLogin.querySelectorAll('input[name="idFormDadosEntradaSaida:idBtnRegistrarSaida"]').length > 0) {
-      aviso('⛵ Realizando Navegação');
+      aviso('⛴ Navegando para página de saida');
       realizarSaida(viewStateNavegacao, dio, entradaSaidaRadix, optionsPost, cookieJar);
       // realizarLogoff(dio, optionsPost);
     } else if (domPostLogin.querySelectorAll('form[name="painelAcessoDadosServidor"]').length > 0) {
+      aviso('🛥 Navegando para página de ponto');
       navegarParaPonto(viewStateNavegacao, dio, servidorSuffix, optionsPost, cookieJar);
     } else if (domPostLogin.querySelectorAll('select[name="selecionarUnidadeForm:unidade"]').length > 0) {
+      aviso('🚢 Navegando a seleção de unidade');
       selecionarUnidade(viewStateNavegacao, dio, servidorSuffix, optionsPost, domPostLogin, cookieJar);
     } else {
       var voltaParaInicio = await dio.get(servidorSuffix);
@@ -500,7 +515,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       }
       var textoHorasRegistradas = '\n\n\n⏱️ Horas Registradas: ' + horasRegistradas[0] + '\n⏰ Horas Contabilizadas: ' + horasRegistradas[1];
       aviso(textoHorasRegistradas);
-      var textoHorarioMinimoSaida = '⌚ Horario Mínimo de Saída: ' + getTextoHorarioMinimoSaida(horasRegistradas, getHorasRegime(), ultimaEntrada);
+      var textoHorarioMinimoSaida = '🐸 Horario Mínimo de Saída: ' + getTextoHorarioMinimoSaida(horasRegistradas, getHorasRegime(), ultimaEntrada);
 
       aviso(textoHorarioMinimoSaida);
       _saveTimetable(horarios.toString() + textoHorasRegistradas + '\n' + textoHorarioMinimoSaida);
