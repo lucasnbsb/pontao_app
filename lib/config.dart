@@ -14,6 +14,7 @@ class _PaginaConfiguracaoState extends State<PaginaConfiguracao> {
   TimeOfDay tempoAviso = TimeOfDay(hour: 1, minute: 0);
   bool saidaAlmocoSePossivel = true;
   bool avisarSaidaAntes = false;
+  bool sso = false;
   var regimeIsSelected = [false, false, false, true];
 
   late SharedPreferences prefs;
@@ -70,6 +71,10 @@ class _PaginaConfiguracaoState extends State<PaginaConfiguracao> {
     if (prefs.containsKey('avisarSaidaAntes')) {
       avisarSaidaAntes = prefs.getBool('avisarSaidaAntes')!;
     }
+
+    if(prefs.containsKey('sso')){
+      sso = prefs.getBool('sso')!;
+    }
   }
 
   Future<bool> _saveCredentials() async {
@@ -86,6 +91,7 @@ class _PaginaConfiguracaoState extends State<PaginaConfiguracao> {
     prefs.setInt('avisoHoras', tempoAviso.hour);
     prefs.setInt('avisoMinutos', tempoAviso.minute);
     prefs.setBool('avisarSaidaAntes', avisarSaidaAntes);
+    prefs.setBool('sso', sso);
     return Future.value(true);
   }
 
@@ -172,6 +178,17 @@ class _PaginaConfiguracaoState extends State<PaginaConfiguracao> {
                     });
                   },
                   secondary: avisarSaidaAntes ? const Icon(Icons.directions_run) : const Icon(Icons.directions_walk)),
+               SwitchListTile(
+                  title: sso
+                      ? const Text('Login via SSO')
+                      : const Text('Login antigo'),
+                  value: sso,
+                  onChanged: (bool value) {
+                    setState(() {
+                      sso = value;
+                    });
+                  },
+                  secondary: const Icon(Icons.account_circle)) ,
               RaisedButton(
                   child: Text('Avisar o retorno do almoço após ' + tempoAviso.format(context) + ' hora(s)',
                       style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),

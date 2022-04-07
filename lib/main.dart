@@ -168,26 +168,47 @@ class _PaginaPontoState extends State<PaginaPonto> {
     if (prefs.containsKey('avisarSaidaAntes')) {
       avisarSaidaAntes = prefs.getBool('avisarSaidaAntes') ?? true;
     }
+
+    if(prefs.containsKey('sso')){
+      sso = prefs.getBool('sso')!;
+    }
   }
 
   /* -------------------------------------------------------------------------- */
   /*                                 Bater Ponto                                */
   /* -------------------------------------------------------------------------- */
   Future baterPonto() async {
-    var loginUrl = desenvolvimento
-        ? 'https://autenticacao.homologa.unb.br/sso-server/login?service=https%3A%2F%2Fsig.homologa.unb.br%2Fsigrh%2Flogin%2Fcas'
-        : 'https://autenticacao.unb.br/sso-server/login?service=https%3A%2F%2Fsig.unb.br%2Fsigrh%2Flogin%2Fcas';
-
-    var baseUrl = '';
-    if (desenvolvimento) {
-      baseUrl = 'https://sig.homologa.unb.br';
-    } else {
-      baseUrl = 'https://sig.unb.br';
+    final loginUrl;
+    final baseUrl;
+    final urlHost;
+    final urlHostLogin;
+    
+    // Definindo os endereços básicos
+    if(desenvolvimento){
+      // DESENVOLVIMENTO
+      if(sso){
+        loginUrl = 'https://autenticacao.homologa.unb.br/sso-server/login?service=https%3A%2F%2Fsig.homologa.unb.br%2Fsigrh%2Flogin%2Fcas';
+        baseUrl = 'https://sig.homologa.unb.br';
+        urlHostLogin = 'autenticacao.homologa.unb.br';
+      }else{
+        loginUrl = 'https://sig.treinamento.unb.br/sigrh/login.jsf';
+        baseUrl = 'https://sig.treinamento.unb.br';
+        urlHostLogin = 'sig.treinamento.unb.br';
+      }
+    }else{
+      // PRODUCAO
+      if(sso){
+        loginUrl = 'https://autenticacao.unb.br/sso-server/login?service=https%3A%2F%2Fsig.unb.br%2Fsigrh%2Flogin%2Fcas';
+        baseUrl = 'https://sig.unb.br';
+        urlHostLogin = 'autenticacao.unb.br';
+      }else{
+        loginUrl = 'https://sig.unb.br/sigrh/login.jsf';
+        baseUrl = 'https://sig.unb.br';
+        urlHostLogin = 'autenticacao.unb.br';
+      }
     }
-
     // host é um header obrigatório para o post
-    final urlHost = baseUrl.replaceAll('https://', '');
-    final urlHostLogin = desenvolvimento ? 'autenticacao.homologa.unb.br' : 'autenticacao.unb.br';
+    urlHost = baseUrl.replaceAll('https://', '');
 
     // aqui ele busca os dados que vieram do shared prefs
     // mudar para colocar direto do shared prefs e deletar
@@ -223,7 +244,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     if (sso) {
       realizarLoginSSO(loginUrl, urlHostLogin, baseUrl, urlHost, dio, cookieJar);
     } else {
-      realizarLoginAntigo(loginUrl, baseUrl, urlHost, dio);
+      realizarLoginAntigo(loginUrl, baseUrl, urlHost, dio, cookieJar);
     }
   }
 
@@ -359,8 +380,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     }
   }
 
-  // NÂO HA GARANTIAS AQUI, EM ESTADO DE TODO
-  realizarLoginAntigo(String loginUrl, String baseUrl, String urlHost, Dio dio) async {
+  realizarLoginAntigo(String loginUrl, String baseUrl, String urlHost, Dio dio, CookieJar cookieJar) async {
     // Usa o referer da pagina expirada para evitar o popup, nao deve ser necessário depois do SSO
     var optionsGet = Options(headers: {'Referer': baseUrl + '/sigrh/expirada.jsp'});
 
@@ -384,7 +404,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
     // Configurar o POST para o login
     // manda dimensões para evitar a página mobile, que nao tem a pagina de ponto
-    FormData formDataLogin = FormData.fromMap({
+    var formDataLogin ={
       'formLogin': 'formLogin',
       'width': '1920',
       'height': '1080',
@@ -393,7 +413,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       'senha': pass,
       'logar': 'Entrar',
       'javax.faces.ViewState': viewStateValue,
-    });
+    };
 
     // basicamente imita os headers utilizados no chrome
     var headersPost = {
@@ -411,7 +431,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       'Accept-Language': 'en-US,en;q=0.9,pt;q=0.8',
     };
 
-    var optionsPost = Options(headers: headersPost, followRedirects: false);
+    var optionsPost = Options(headers: headersPost, followRedirects: false, contentType: Headers.formUrlEncodedContentType,);
 
     // Post para realizar o login, o processo é o mesmo mas com post agora, usa o follow redirects
     // que é uma funcao recursiva que faz as chamadas para o endereco colocado no header location da resposta
@@ -428,7 +448,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
 
     avisoVerboso("Post de login bem sucedido, realizando navegação");
     // Verficiar o status após a tentativa de login e navegar de acordo
-    // realizarNavegacao(postLogin, dio, entradaSaidaSuffix, optionsPost);
+    realizarNavegacao(postLogin, dio, entradaSaidaSuffix, optionsPost, cookieJar);
   }
 
   // verifica onde o login foi parar, tipicamente na página de ponto, mas pode ser outro lugar
@@ -542,7 +562,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       'javax.faces.ViewState': viewState,
     };
 
-    if (desenvolvimento || almoco) {
+    if (almoco) {
       aviso(textoSaidaParaAlmoco());
     } else {
       aviso('🎉 Realizando Saída');
@@ -568,7 +588,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     }
 
     // Marcar o push notification, roda sempre em desenv
-    if (desenvolvimento || almoco) {
+    if (almoco) {
       marcarNotificacao(
           Notificacoes.saida_almoco.index, tempoAviso.hour, tempoAviso.minute, 'Horário mínimo de saída de almoço atingido', 'Lembrete');
     }
