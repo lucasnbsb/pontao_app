@@ -338,7 +338,6 @@ class _PaginaPontoState extends State<PaginaPonto> {
         setState(() {
           isLoading = false;
         });
-
         return;
       }
     } on DioError catch (e) {
@@ -443,7 +442,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
       avisoVerboso("Enviando o POST de login");
     } on DioError catch (e) {
       avisoVerboso("Catch no post de login");
-      postLogin = await followRedirect(e, dio);
+      postLogin = await followLoginRedirect(e, dio, cookieJar);
     }
 
     avisoVerboso("Post de login bem sucedido, realizando navegação");
@@ -459,7 +458,7 @@ class _PaginaPontoState extends State<PaginaPonto> {
     var viewStateNavegacao = buscarViewState(domPostLogin);
 
     if (postLoginData.data.contains('autenticar-se novamente')) {
-      avisoErro('⛔ Sessão expirada, tente novamente');
+      avisoErro('⛔ Sessão expirada, verifique o tipo de login (com sso ou login antigo) e abra o sigrh no navegador para corrigir o erro clicando no popup de sessão expirada');
       return;
     } else {
       var msgErro = domPostLogin.querySelectorAll('ul.erros > li');
